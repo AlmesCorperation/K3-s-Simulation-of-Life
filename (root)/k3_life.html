@@ -51,7 +51,7 @@
 <body>
 
   <h1>K3's Simulation of Life</h1>
-  <p>Click or drag on the grid to draw cells manually!</p>
+  <p>Rule 7: Tactical Evolutionary Movement (Evasion, Herd Joining, Threat Escape)</p>
 
   <div class="controls">
     <button onclick="togglePause()" id="pauseBtn">Resume</button>
@@ -84,7 +84,7 @@ const ctx = canvas.getContext('2d');
 
 let grid = createGrid();
 let generation = 0;
-let isPaused = true; // Paused by default so you can draw first
+let isPaused = true;
 let isMouseDown = false;
 
 class Cell {
@@ -93,7 +93,7 @@ class Cell {
     this.gender = this.assignGender();
     this.age = 0; 
     this.stepsSinceEaten = 0; 
-    this.genome = genome || this.generateGenome(); 
+    this.genome = genome || this.generateGenome(); // Pure ATGC DNA
   }
 
   assignGender() {
@@ -101,6 +101,7 @@ class Cell {
     return genders[Math.floor(Math.random() * genders.length)];
   }
 
+  // Rule 8: 100 Sequences of ATGC Bases (Pure Genetic DNA)
   generateGenome() {
     const bases = ['A', 'T', 'G', 'C'];
     let seqs = [];
@@ -131,28 +132,102 @@ function createGrid() {
   return g;
 }
 
-// Fixed neighbor count function
 function getNeighborCount(r, c) {
   let count = 0;
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
-      let nr = r + dr;
-      let nc = c + dc;
+      let nr = r + dr, nc = c + dc;
       if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
-        if (grid[nr][nc] !== null) {
-          count++;
-        }
+        if (grid[nr][nc] !== null) count++;
       }
     }
   }
   return count;
 }
 
+// Rule 7: Tactical Evolutionary Movement Heuristics
+function calculateTacticalMove(r, c, cell) {
+  let bestDr = 0;
+  let bestDc = 0;
+  let bestScore = -Infinity;
+
+  // Evaluate all 8 surrounding possible step directions (+ staying put)
+  const options = [
+    { dr: 0, dc: 0 }, { dr: -1, dc: 0 }, { dr: 1, dc: 0 },
+    { dr: 0, dc: -1 }, { dr: 0, dc: 1 }, { dr: -1, dc: -1 },
+    { dr: -1, dc: 1 }, { dr: 1, dc: -1 }, { dr: 1, dc: 1 }
+  ];
+
+  for (let opt of options) {
+    let nr = r + opt.dr;
+    let nc = c + opt.dc;
+
+    if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS) continue;
+    if (opt.dr !== 0 || opt.dc !== 0) {
+      if (grid[nr][nc] !== null) continue; // Target tile blocked
+    }
+
+    let score = 0;
+    let neighborsAtTarget = 0;
+    let nearbyPredators = 0;
+
+    // Scan 3x3 area around potential target tile
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        let checkR = nr + dr, checkC = nc + dc;
+        if (checkR >= 0 && checkR < ROWS && checkC >= 0 && checkC < COLS) {
+          let neighborCell = grid[checkR][checkC];
+          if (neighborCell) {
+            neighborsAtTarget++;
+            if (neighborCell.role === 'predator') nearbyPredators++;
+          }
+        }
+      }
+    }
+
+    if (cell.role === 'prey') {
+      // 1. FLEE PREDATORS: High penalty for being near predators
+      if (nearbyPredators > 0) score -= 100 * nearbyPredators;
+
+      // 2. AVOID OVERCROWDING: Penalty if target spot would cause 4+ neighbor death
+      if (neighborsAtTarget >= 4) score -= 50;
+
+      // 3. ESCAPE ISOLATION: Reward moving toward other cells if currently isolated
+      if (neighborsAtTarget === 0) score -= 20; // Isolated spot penalty
+      else if (neighborsAtTarget >= 1 && neighborsAtTarget <= 3) score += 30; // Optimal herd size
+    } 
+    else if (cell.role === 'predator') {
+      // Predators seek out prey and avoid starving
+      let nearbyPrey = 0;
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          let checkR = nr + dr, checkC = nc + dc;
+          if (checkR >= 0 && checkR < ROWS && checkC >= 0 && checkC < COLS) {
+            let neighborCell = grid[checkR][checkC];
+            if (neighborCell && neighborCell.role === 'prey') nearbyPrey++;
+          }
+        }
+      }
+      score += nearbyPrey * 40;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestDr = opt.dr;
+      bestDc = opt.dc;
+    }
+  }
+
+  return [bestDr, bestDc];
+}
+
 function updateWorld() {
   if (isPaused) return;
 
-  let nextGrid = createGrid();
+  // STEP 1: Process Births, Overcrowding, Isolation, and Aging
+  let survivingGrid = createGrid();
 
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -161,12 +236,11 @@ function updateWorld() {
       if (currentCell) {
         let neighborCount = getNeighborCount(r, c);
 
-        // Rule 3: STRICT Overcrowding Check (Dies ONLY if 4 or more neighbors)
+        // Rule 3: STRICT Overcrowding Check (4+ neighbors dies)
         if (neighborCount >= 4) continue; 
 
         // Rule 4: Isolation Pair Check
         if (neighborCount === 1) {
-          // Check if isolated pair
           let isPairIsolated = false;
           for (let dr = -1; dr <= 1; dr++) {
             for (let dc = -1; dc <= 1; dc++) {
@@ -191,29 +265,7 @@ function updateWorld() {
           currentCell.age++;
         }
 
-        // Rule 7 & 9: Movement & Feeding
-        let moved = false;
-        if (Math.random() < 0.5) {
-          let dr = Math.floor(Math.random() * 3) - 1;
-          let dc = Math.floor(Math.random() * 3) - 1;
-          let nr = r + dr, nc = c + dc;
-
-          if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
-            let target = grid[nr][nc];
-            if (currentCell.role === 'predator' && target && target.role === 'prey') {
-              currentCell.stepsSinceEaten = 0;
-              nextGrid[nr][nc] = currentCell;
-              moved = true;
-            } else if (!target && !nextGrid[nr][nc]) {
-              nextGrid[nr][nc] = currentCell;
-              moved = true;
-            }
-          }
-        }
-
-        if (!moved && !nextGrid[r][c]) {
-          nextGrid[r][c] = currentCell;
-        }
+        survivingGrid[r][c] = currentCell;
 
       } else {
         // Rule 2: Reproduction on exact horizontal 1-tile gap
@@ -222,9 +274,56 @@ function updateWorld() {
           let right = grid[r][c + 1];
 
           if (left && right && left.role === 'prey' && right.role === 'prey') {
-            let childGenome = left.genome.map((seq, i) => Math.random() > 0.5 ? seq : right.genome[i]);
-            nextGrid[r][c] = new Cell('prey', childGenome);
+            // Rule 8: Recombine parent ATGC DNA with point mutation chance
+            let childGenome = left.genome.map((seq, i) => {
+              let chosen = Math.random() > 0.5 ? seq : right.genome[i];
+              if (Math.random() < 0.01) {
+                let bases = ['A', 'T', 'G', 'C'];
+                let pos = Math.floor(Math.random() * 4);
+                return chosen.substring(0, pos) + bases[Math.floor(Math.random() * 4)] + chosen.substring(pos + 1);
+              }
+              return chosen;
+            });
+            survivingGrid[r][c] = new Cell('prey', childGenome);
           }
+        }
+      }
+    }
+  }
+
+  // STEP 2: Process Rule 7 Tactical Evolutionary Movement
+  let nextGrid = createGrid();
+
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      let cell = survivingGrid[r][c];
+      if (!cell) continue;
+
+      let moved = false;
+      let [dr, dc] = calculateTacticalMove(r, c, cell);
+      let nr = r + dr;
+      let nc = c + dc;
+
+      if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+        let target = survivingGrid[nr][nc];
+        
+        // Rule 9: Predator eating prey
+        if (cell.role === 'predator' && target && target.role === 'prey') {
+          cell.stepsSinceEaten = 0;
+          nextGrid[nr][nc] = cell;
+          survivingGrid[nr][nc] = null; 
+          moved = true;
+        } 
+        // Move to empty grid slot
+        else if (!target && !nextGrid[nr][nc]) {
+          nextGrid[nr][nc] = cell;
+          moved = true;
+        }
+      }
+
+      if (!moved) {
+        if (!nextGrid[r][c]) {
+          nextGrid[r][c] = cell;
         }
       }
     }
@@ -259,7 +358,6 @@ function render() {
   document.getElementById('predCount').innerText = pred;
 }
 
-// Interactive Drawing (Click / Click & Drag)
 function placeCell(event) {
   const rect = canvas.getBoundingClientRect();
   const x = event.clientX - rect.left;
@@ -304,3 +402,4 @@ setInterval(updateWorld, 100);
 
 </body>
 </html>
+
