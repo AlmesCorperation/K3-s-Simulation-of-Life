@@ -21,13 +21,13 @@
       box-shadow: 0 0 20px rgba(0,0,0,0.8);
       margin-bottom: 15px;
     }
-    canvas { display: block; background-color: #000; }
+    canvas { display: block; background-color: #000; cursor: pointer; }
     .controls {
       display: flex;
       gap: 10px;
       margin-bottom: 15px;
     }
-    button {
+    button, select {
       background-color: #1f1f1f;
       color: #00e676;
       border: 1px solid #00e676;
@@ -36,7 +36,7 @@
       font-weight: bold;
       border-radius: 4px;
     }
-    button:hover { background-color: #00e676; color: #121212; }
+    button:hover, select:hover { background-color: #00e676; color: #121212; }
     .stats {
       font-family: monospace;
       font-size: 14px;
@@ -51,12 +51,15 @@
 <body>
 
   <h1>K3's Simulation of Life</h1>
-  <p>Emergent ALife Engine — Rules 1 through 9</p>
+  <p>Click or drag on the grid to draw cells manually!</p>
 
   <div class="controls">
-    <button onclick="togglePause()" id="pauseBtn">Pause</button>
-    <button onclick="resetSimulation()">Reset World</button>
-    <button onclick="spawnPredator()">Spawn Predator</button>
+    <button onclick="togglePause()" id="pauseBtn">Resume</button>
+    <button onclick="clearGrid()">Clear Grid</button>
+    <select id="spawnType">
+      <option value="prey">Spawn Prey Cell</option>
+      <option value="predator">Spawn Predator Cell</option>
+    </select>
   </div>
 
   <div id="canvas-container">
@@ -81,16 +84,16 @@ const ctx = canvas.getContext('2d');
 
 let grid = createGrid();
 let generation = 0;
-let isPaused = false;
+let isPaused = true; // Paused by default so you can draw first
+let isMouseDown = false;
 
-// Cell Definition with ATGC Genome & Rule 9 Metadata
 class Cell {
   constructor(role = 'prey', genome = null) {
-    this.role = role; // 'prey' or 'predator'
-    this.gender = this.assignGender(); // XY, XX, YX, YY
-    this.age = 0; // 0: Healthy, 1: Aging, 2: Almost Dead
-    this.stepsSinceEaten = 0; // Rule 9: Predator starvation timer (max 30)
-    this.genome = genome || this.generateGenome(); // Rule 8: 100 ATGC sequences
+    this.role = role; 
+    this.gender = this.assignGender();
+    this.age = 0; 
+    this.stepsSinceEaten = 0; 
+    this.genome = genome || this.generateGenome(); 
   }
 
   assignGender() {
@@ -109,12 +112,10 @@ class Cell {
     return seqs;
   }
 
-  // Exact K3 State & Gender Color Matrix Mapping
   getColor() {
     if (this.role === 'predator') {
       return this.age === 0 ? '#ff1744' : (this.age === 1 ? '#d50000' : '#880e4f');
     }
-    // Prey Gender States
     if (this.gender === 'XY') return this.age === 0 ? '#ffff8d' : (this.age === 1 ? '#bcaaa4' : '#ff5252');
     if (this.gender === 'XX') return this.age === 0 ? '#80d8ff' : (this.age === 1 ? '#40c4ff' : '#448aff');
     if (this.gender === 'YX') return this.age === 0 ? '#b9f6ca' : (this.age === 1 ? '#69f0ae' : '#00c853');
@@ -130,23 +131,9 @@ function createGrid() {
   return g;
 }
 
-// Populate Random Seed
-function seedGrid() {
-  grid = createGrid();
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      if (Math.random() < 0.15) {
-        let role = Math.random() < 0.02 ? 'predator' : 'prey';
-        grid[r][c] = new Cell(role);
-      }
-    }
-  }
-  generation = 0;
-}
-
-function getNeighbors(r, c) {
+// Fixed neighbor count function
+function getNeighborCount(r, c) {
   let count = 0;
-  let neighbors = [];
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
@@ -155,15 +142,13 @@ function getNeighbors(r, c) {
       if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
         if (grid[nr][nc] !== null) {
           count++;
-          neighbors.push({ r: nr, c: nc, cell: grid[nr][nc] });
         }
       }
     }
   }
-  return { count, neighbors };
+  return count;
 }
 
-// Core Execution Loop applying K3 Rules 1-9
 function updateWorld() {
   if (isPaused) return;
 
@@ -174,42 +159,49 @@ function updateWorld() {
       let currentCell = grid[r][c];
 
       if (currentCell) {
-        let { count, neighbors } = getNeighbors(r, c);
+        let neighborCount = getNeighborCount(r, c);
 
-        // Rule 3: Overcrowding (4+ neighbors causes cell death)
-        if (count >= 4) continue;
+        // Rule 3: STRICT Overcrowding Check (Dies ONLY if 4 or more neighbors)
+        if (neighborCount >= 4) continue; 
 
-        // Rule 4: Isolation Pair Death
-        if (count === 1) {
-          let n = neighbors[0];
-          let nNeigh = getNeighbors(n.r, n.c).count;
-          if (nNeigh === 1) continue; // Isolated pair dies off
+        // Rule 4: Isolation Pair Check
+        if (neighborCount === 1) {
+          // Check if isolated pair
+          let isPairIsolated = false;
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              if (dr === 0 && dc === 0) continue;
+              let nr = r + dr, nc = c + dc;
+              if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS && grid[nr][nc]) {
+                if (getNeighborCount(nr, nc) === 1) isPairIsolated = true;
+              }
+            }
+          }
+          if (isPairIsolated) continue; 
         }
 
-        // Rule 9: Predator Starvation (Max 30 moves without eating)
+        // Rule 9: Predator Starvation (Max 30 moves)
         if (currentCell.role === 'predator') {
           currentCell.stepsSinceEaten++;
-          if (currentCell.stepsSinceEaten >= 30) continue; // Starves to death
+          if (currentCell.stepsSinceEaten >= 30) continue;
         }
 
-        // Rule 6: Mandatory Lifecycle Transitions (Healthy -> Aging -> Almost Dead)
+        // Rule 6: Lifecycle Transitions
         if (generation % 20 === 0 && currentCell.age < 2) {
           currentCell.age++;
         }
 
-        // Rule 7 & 9: Movement & Predator Feeding Logic
+        // Rule 7 & 9: Movement & Feeding
         let moved = false;
-        if (Math.random() < 0.5) { // Active movement check
+        if (Math.random() < 0.5) {
           let dr = Math.floor(Math.random() * 3) - 1;
           let dc = Math.floor(Math.random() * 3) - 1;
-          let nr = r + dr;
-          let nc = c + dc;
+          let nr = r + dr, nc = c + dc;
 
           if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
             let target = grid[nr][nc];
-            // Predator eats Prey
             if (currentCell.role === 'predator' && target && target.role === 'prey') {
-              currentCell.stepsSinceEaten = 0; // Reset hunger timer
+              currentCell.stepsSinceEaten = 0;
               nextGrid[nr][nc] = currentCell;
               moved = true;
             } else if (!target && !nextGrid[nr][nc]) {
@@ -224,13 +216,12 @@ function updateWorld() {
         }
 
       } else {
-        // Rule 2: Reproduction via Exact Horizontal 1-Tile Gap
+        // Rule 2: Reproduction on exact horizontal 1-tile gap
         if (c > 0 && c < COLS - 1) {
           let left = grid[r][c - 1];
           let right = grid[r][c + 1];
 
           if (left && right && left.role === 'prey' && right.role === 'prey') {
-            // Rule 8: ATGC Genome Recombination (Single-Point Crossover)
             let childGenome = left.genome.map((seq, i) => Math.random() > 0.5 ? seq : right.genome[i]);
             nextGrid[r][c] = new Cell('prey', childGenome);
           }
@@ -268,25 +259,46 @@ function render() {
   document.getElementById('predCount').innerText = pred;
 }
 
+// Interactive Drawing (Click / Click & Drag)
+function placeCell(event) {
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const c = Math.floor(x / CELL_SIZE);
+  const r = Math.floor(y / CELL_SIZE);
+
+  if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+    const role = document.getElementById('spawnType').value;
+    grid[r][c] = new Cell(role);
+    render();
+  }
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  isMouseDown = true;
+  placeCell(e);
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  if (isMouseDown) placeCell(e);
+});
+
+window.addEventListener('mouseup', () => {
+  isMouseDown = false;
+});
+
 function togglePause() {
   isPaused = !isPaused;
   document.getElementById('pauseBtn').innerText = isPaused ? 'Resume' : 'Pause';
 }
 
-function resetSimulation() {
-  seedGrid();
+function clearGrid() {
+  grid = createGrid();
+  generation = 0;
   render();
 }
 
-function spawnPredator() {
-  let r = Math.floor(Math.random() * ROWS);
-  let c = Math.floor(Math.random() * COLS);
-  grid[r][c] = new Cell('predator');
-  render();
-}
-
-// Launch Engine
-seedGrid();
+render();
 setInterval(updateWorld, 100);
 </script>
 
